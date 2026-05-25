@@ -1,7 +1,5 @@
 # 围棋复盘 AI · Go-Reviewer
 
-![Go-Reviewer Banner](https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=A+sleek+modern+Go+board+with+black+and+white+stones+fading+into+a+digital+grid+network+with+glowing+blue+AI+circuit+lines+and+golden+win+rate+charts+overlaid+on+a+dark+wooden+texture%2C+cinematic+lighting%2C+professional+software+screenshot+style&image_size=landscape_16_9)
-
 **Go-Reviewer** 是一款结合 KataGo 围棋引擎与大语言模型的智能复盘桌面应用，让专业围棋复盘触手可及。支持在浏览器中使用，也可打包为跨平台桌面应用（Windows / macOS / Linux）。
 
 <div align="center">
@@ -22,16 +20,16 @@
 
 ## 技术栈
 
-| 层级 | 技术 | 用途 |
-|---|---|---|
-| **前端** | React 18 + TypeScript + Vite + Tailwind CSS | 棋盘 UI 与交互 |
-| **后端** | Python + Flask | REST API 与 KataGo 桥接 |
-| **引擎** | KataGo (OpenCL + Analysis Engine) | 围棋 AI 计算 |
-| **AI 解说** | OpenAI API（兼容协议） | 自然语言复盘讲解 |
-| **图表** | Recharts | 胜率曲线可视化 |
-| **状态管理** | Zustand | 前端状态管理 |
-| **桌面封装** | Tauri 2 + Rust | 跨平台桌面应用壳 |
-| **GPU 调优** | 内置 gpu_optimizer | 自动检测 GPU 并生成最优配置 |
+| 层级         | 技术                                        | 用途                        |
+| ------------ | ------------------------------------------- | --------------------------- |
+| **前端**     | React 18 + TypeScript + Vite + Tailwind CSS | 棋盘 UI 与交互              |
+| **后端**     | Python + Flask                              | REST API 与 KataGo 桥接     |
+| **引擎**     | KataGo (OpenCL + Analysis Engine)           | 围棋 AI 计算                |
+| **AI 解说**  | OpenAI API（兼容协议）                      | 自然语言复盘讲解            |
+| **图表**     | Recharts                                    | 胜率曲线可视化              |
+| **状态管理** | Zustand                                     | 前端状态管理                |
+| **桌面封装** | Tauri 2 + Rust                              | 跨平台桌面应用壳            |
+| **GPU 调优** | 内置 gpu_optimizer                          | 自动检测 GPU 并生成最优配置 |
 
 ## 快速开始
 
@@ -83,6 +81,7 @@ pip install -r requirements.txt
 #### 启动服务
 
 **终端 1 — 后端：**
+
 ```bash
 cd backend
 python app.py
@@ -90,6 +89,7 @@ python app.py
 ```
 
 **终端 2 — 前端：**
+
 ```bash
 cd go-reviewer
 npm run dev
@@ -155,6 +155,7 @@ npm run dev
 ## API 接口
 
 ### 上传棋谱
+
 ```
 POST /api/upload
 Content-Type: multipart/form-data
@@ -162,18 +163,21 @@ Response: { gameId, moves, boardSize, ... }
 ```
 
 ### 分析局面
+
 ```
 GET /api/analyze/:gameId/:moveNumber
 Response: { winRate, scoreLead, recommendedMoves }
 ```
 
 ### 生成解说
+
 ```
 GET /api/commentary/stream/:gameId/:moveNumber
 Content-Type: text/event-stream
 ```
 
 ### 配置接口
+
 ```
 POST /api/config/katago   # 配置 KataGo
 POST /api/config/llm      # 配置 LLM
@@ -182,30 +186,37 @@ POST /api/config/llm      # 配置 LLM
 ## 常见问题
 
 ### Q: KataGo 分析失败怎么办？
+
 A: 检查以下几点：
+
 1. KataGo 路径配置是否正确
 2. 权重文件路径是否正确
 3. KataGo 是否有执行权限
 4. 后端服务是否正常运行
 
 ### Q: AI 解说生成失败怎么办？
+
 A: 检查以下几点：
+
 1. API Key 是否正确
 2. 网络连接是否正常
 3. API 配额是否充足
 4. 模型名称是否正确
 
 ### Q: 支持哪些棋谱格式？
+
 A: 目前仅支持 `.sgf` 格式的棋谱文件。
 
 ## 开发说明
 
 ### 前端开发
+
 - 使用 Zustand 进行状态管理
 - 组件遵循单一职责原则
 - 使用 Tailwind CSS 进行样式开发
 
 ### 后端开发
+
 - Flask 提供 RESTful API
 - GTP 协议与 KataGo 通信
 - SSE (Server-Sent Events) 实现流式解说生成
