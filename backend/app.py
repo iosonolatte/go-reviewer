@@ -19,6 +19,18 @@ from katago_analysis import (
 app = Flask(__name__)
 CORS(app)
 
+# ---- 路径常量 ----
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(BACKEND_DIR)  # go-reviewer 项目根目录
+KATAGO_DIR = os.path.join(PROJECT_DIR, "katago-v1.15.3-opencl-windows-x64")
+
+# 持久化配置：存放在 temp（sandbox 可写），代码层已预置默认路径，丢失不担心
+_CONFIG_DIR = os.path.join(tempfile.gettempdir(), "go-reviewer")
+os.makedirs(_CONFIG_DIR, exist_ok=True)
+CONFIG_FILE = os.path.join(_CONFIG_DIR, "config.json")
+print(f"[init] Config file: {CONFIG_FILE}")
+
+# 上传文件夹
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "go_reviewer_uploads")
 try:
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -27,15 +39,18 @@ except Exception:
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 print(f"[init] Upload folder: {UPLOAD_FOLDER}")
 
-CONFIG_FILE = os.path.join(tempfile.gettempdir(), "go_reviewer_config.json")
-print(f"[init] Config file: {CONFIG_FILE}")
-
 games_store = {}
+
+# ---- 预置默认 KataGo 路径，首次启动即可用 ----
+_DEFAULT_KATAGO_PATH = os.path.join(KATAGO_DIR, "katago.exe")
+_DEFAULT_CONFIG_PATH = os.path.join(KATAGO_DIR, "analysis_fast.cfg")
+_DEFAULT_MODEL_PATH = os.path.join(KATAGO_DIR, "kata1-b18c384nbt.bin.gz")
+
 config_store = {
     "katago": {
-        "path": "",
-        "configPath": "",
-        "modelPath": "",
+        "path": _DEFAULT_KATAGO_PATH if os.path.exists(_DEFAULT_KATAGO_PATH) else "",
+        "configPath": _DEFAULT_CONFIG_PATH if os.path.exists(_DEFAULT_CONFIG_PATH) else "",
+        "modelPath": _DEFAULT_MODEL_PATH if os.path.exists(_DEFAULT_MODEL_PATH) else "",
         "analyzeTime": 3
     },
     "llm": {
@@ -59,6 +74,10 @@ def load_config():
             print(f"[init] 已加载持久化配置: katago.path={config_store['katago']['path']!r}")
         except Exception as e:
             print(f"[init] 加载配置失败: {e}")
+    else:
+        # 首次启动：将代码默认值写入磁盘
+        save_config()
+        print(f"[init] 已写入默认配置")
 
 
 def save_config():
@@ -379,14 +398,14 @@ def analyze_move(game_id, move_number):
         is_human = "human" in (cfg["modelPath"] or "").lower()
         human_profile = "preaz_9d" if is_human else None
         # analyzeTime 现在直接被解释为 visits 上限
-        # 1=超快(60), 3=快(120), 5=均衡(200), 10=精确(400), 20=深度(800)
-        analyze_time = config_store["katago"].get("analyzeTime", 5)
+        # 1=极速(250), 3=快(750), 5=均衡(1250), 10=精确(2500), 20=深度(5000)
+        analyze_time = config_store["katago"].get("analyzeTime", 3)
         # 允许前端在 query 参数里临时覆盖
         override_visits = request.args.get("visits", type=int)
         if override_visits and override_visits > 0:
             max_visits = override_visits
         else:
-            max_visits = max(60, min(2000, analyze_time * 40))
+            max_visits = max(100, min(5000, analyze_time * 250))
 
         print(f"[analyze] 第 {move_number} 手 - 使用 Analysis Engine (maxVisits={max_visits})")
         engine = get_analysis_engine(cfg["path"], cfg["configPath"], cfg["modelPath"])

@@ -249,10 +249,10 @@ const Review: React.FC = () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             maxVisits: Math.max(
-              60,
+              100,
               Math.min(
-                2000,
-                (useGameStore.getState().katagoConfig.analyzeTime || 3) * 40,
+                5000,
+                (useGameStore.getState().katagoConfig.analyzeTime || 3) * 250,
               ),
             ),
           }),

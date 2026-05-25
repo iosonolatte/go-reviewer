@@ -41,3 +41,5 @@ backend/.temp/
 backend/diag_*.py
 backend/test_*.py
 backend/setup_*.py
+backend/go_reviewer_config.json
+backend/config.json
