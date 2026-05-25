@@ -22,6 +22,7 @@ import WinRateChart from "../components/WinRateChart";
 import CommentaryPanel from "../components/CommentaryPanel";
 import MoveTimeline from "../components/MoveTimeline";
 import HawkEyePanel, { HawkEyeData } from "../components/HawkEyePanel";
+import { apiUrl } from "../lib/api";
 
 type RightTab = "analysis" | "hawkeye";
 
@@ -69,7 +70,7 @@ const Review: React.FC = () => {
           // 使用 AbortController 让相同 moveNum 的旧请求可被取消
           const controller = new AbortController();
           const response = await fetch(
-            `http://localhost:5000/api/analyze/${currentGame.gameId}/${moveNum}`,
+            apiUrl(`/api/analyze/${currentGame.gameId}/${moveNum}`),
             { signal: controller.signal },
           );
           if (response.status === 404) {
@@ -102,7 +103,7 @@ const Review: React.FC = () => {
 
       try {
         const response = await fetch(
-          `http://localhost:5000/api/commentary/${currentGame.gameId}/${moveNum}`,
+          apiUrl(`/api/commentary/${currentGame.gameId}/${moveNum}`),
         );
         if (!response.ok) return false;
         const data = await response.json();
@@ -243,7 +244,7 @@ const Review: React.FC = () => {
     setFlashAnalyzing(true);
     try {
       const response = await fetch(
-        `http://localhost:5000/api/flash-analyze/${currentGame.gameId}`,
+        apiUrl(`/api/flash-analyze/${currentGame.gameId}`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -282,7 +283,7 @@ const Review: React.FC = () => {
     if (!currentGame) return;
     try {
       const response = await fetch(
-        `http://localhost:5000/api/hawk-eye/${currentGame.gameId}`,
+        apiUrl(`/api/hawk-eye/${currentGame.gameId}`),
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -307,7 +308,7 @@ const Review: React.FC = () => {
 
       // 3. 异步同步到后端（如果是远程对局）
       if (!currentGame.gameId.startsWith("local-")) {
-        fetch(`http://localhost:5000/api/game/${currentGame.gameId}/play`, {
+        fetch(apiUrl(`/api/game/${currentGame.gameId}/play`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ color: nextColor, position }),
@@ -322,7 +323,7 @@ const Review: React.FC = () => {
     if (!currentGame || currentGame.moves.length === 0) return;
     undoLastMove();
     if (!currentGame.gameId.startsWith("local-")) {
-      fetch(`http://localhost:5000/api/game/${currentGame.gameId}/undo`, {
+      fetch(apiUrl(`/api/game/${currentGame.gameId}/undo`), {
         method: "POST",
       }).catch((err) => console.warn("同步悔棋失败:", err));
     }
@@ -332,7 +333,7 @@ const Review: React.FC = () => {
   const handleResetGame = useCallback(async () => {
     if (!confirm("确定要清空当前棋盘重新开始吗？")) return;
     try {
-      const response = await fetch("http://localhost:5000/api/game/new", {
+      const response = await fetch(apiUrl("/api/game/new"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ boardSize: 19, komi: 6.5 }),

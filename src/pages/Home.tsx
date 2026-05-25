@@ -2,6 +2,7 @@ import React, { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Upload, FileText, Sparkles, CircleDot, Play } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
+import { apiUrl } from "../lib/api";
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
@@ -13,7 +14,7 @@ const Home: React.FC = () => {
   const handleStartLive = useCallback(async () => {
     setCreatingNew(true);
     try {
-      const response = await fetch("http://localhost:5000/api/game/new", {
+      const response = await fetch(apiUrl("/api/game/new"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ boardSize: 19, komi: 6.5 }),
@@ -55,7 +56,7 @@ const Home: React.FC = () => {
       try {
         setUploadProgress(30);
 
-        const response = await fetch("http://localhost:5000/api/upload", {
+        const response = await fetch(apiUrl("/api/upload"), {
           method: "POST",
           body: formData,
         });

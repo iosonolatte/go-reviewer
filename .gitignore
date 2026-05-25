@@ -43,3 +43,12 @@ backend/test_*.py
 backend/setup_*.py
 backend/go_reviewer_config.json
 backend/config.json
+backend/dist/
+backend/build/
+backend/*.spec.bak
+
+# Tauri
+src-tauri/target/
+src-tauri/binaries/go-reviewer-backend*
+src-tauri/gen/
+node_modules/.vite-temp/

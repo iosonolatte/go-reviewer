@@ -1,4 +1,5 @@
 import os
+import sys
 import uuid
 import json
 import tempfile
@@ -15,23 +16,77 @@ from katago_analysis import (
     reset_analysis_engine,
     parse_analysis_response
 )
+from gpu_optimizer import auto_optimize, GPU_PROFILES
 
 app = Flask(__name__)
 CORS(app)
 
 # ---- 路径常量 ----
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = os.path.dirname(BACKEND_DIR)  # go-reviewer 项目根目录
-KATAGO_DIR = os.path.join(PROJECT_DIR, "katago-v1.15.3-opencl-windows-x64")
+# 兼容三种运行环境:
+#   1. 开发模式 (python backend/app.py): __file__ 在 backend/, KataGo 在 PROJECT_DIR/katago-...
+#   2. PyInstaller 单文件打包 (sys.frozen): KataGo 资源被解压到 sys._MEIPASS, 但用户文件在 exe 同目录
+#   3. Tauri sidecar 运行: exe 位于 src-tauri/binaries/, 资源由 Tauri resource 提供
+def _resolve_katago_dir() -> str:
+    # 环境变量优先 (Tauri 启动时注入)
+    env_dir = os.environ.get("GO_REVIEWER_KATAGO_DIR")
+    if env_dir and os.path.isdir(env_dir):
+        return env_dir
 
-# 持久化配置：存放在 temp（sandbox 可写），代码层已预置默认路径，丢失不担心
-_CONFIG_DIR = os.path.join(tempfile.gettempdir(), "go-reviewer")
+    if getattr(sys, "frozen", False):
+        # PyInstaller 打包后, exe 同目录或上级目录寻找
+        exe_dir = os.path.dirname(sys.executable)
+        for candidate in [
+            os.path.join(exe_dir, "katago"),
+            os.path.join(exe_dir, "..", "katago"),
+            os.path.join(exe_dir, "..", "..", "Resources", "katago"),
+        ]:
+            if os.path.isdir(candidate):
+                return os.path.abspath(candidate)
+        return os.path.abspath(os.path.join(exe_dir, "katago"))
+
+    # 开发模式
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(backend_dir)
+    return os.path.join(project_dir, "katago-v1.15.3-opencl-windows-x64")
+
+
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(BACKEND_DIR)
+KATAGO_DIR = _resolve_katago_dir()
+print(f"[init] KataGo dir: {KATAGO_DIR}")
+
+# 持久化配置：用户数据目录 (跨平台)
+def _resolve_config_dir() -> str:
+    env_dir = os.environ.get("GO_REVIEWER_DATA_DIR")
+    if env_dir:
+        os.makedirs(env_dir, exist_ok=True)
+        return env_dir
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+        d = os.path.join(base, "go-reviewer")
+    elif sys.platform == "darwin":
+        d = os.path.expanduser("~/Library/Application Support/go-reviewer")
+    else:
+        d = os.path.expanduser("~/.local/share/go-reviewer")
+    try:
+        os.makedirs(d, exist_ok=True)
+        # 写入测试
+        test_file = os.path.join(d, ".write_test")
+        with open(test_file, "w") as f:
+            f.write("ok")
+        os.remove(test_file)
+        return d
+    except Exception:
+        return os.path.join(tempfile.gettempdir(), "go-reviewer")
+
+
+_CONFIG_DIR = _resolve_config_dir()
 os.makedirs(_CONFIG_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(_CONFIG_DIR, "config.json")
 print(f"[init] Config file: {CONFIG_FILE}")
 
 # 上传文件夹
-UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), "go_reviewer_uploads")
+UPLOAD_FOLDER = os.path.join(_CONFIG_DIR, "uploads")
 try:
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 except Exception:
@@ -42,7 +97,9 @@ print(f"[init] Upload folder: {UPLOAD_FOLDER}")
 games_store = {}
 
 # ---- 预置默认 KataGo 路径，首次启动即可用 ----
-_DEFAULT_KATAGO_PATH = os.path.join(KATAGO_DIR, "katago.exe")
+# 适配不同平台的可执行文件名
+_KATAGO_EXE_NAME = "katago.exe" if sys.platform == "win32" else "katago"
+_DEFAULT_KATAGO_PATH = os.path.join(KATAGO_DIR, _KATAGO_EXE_NAME)
 _DEFAULT_CONFIG_PATH = os.path.join(KATAGO_DIR, "analysis_fast.cfg")
 _DEFAULT_MODEL_PATH = os.path.join(KATAGO_DIR, "kata1-b18c384nbt.bin.gz")
 
@@ -75,9 +132,26 @@ def load_config():
         except Exception as e:
             print(f"[init] 加载配置失败: {e}")
     else:
-        # 首次启动：将代码默认值写入磁盘
-        save_config()
-        print(f"[init] 已写入默认配置")
+        # 尝试从旧位置迁移配置
+        _migrate_old_config()
+        if not os.path.exists(CONFIG_FILE):
+            # 首次启动：将代码默认值写入磁盘
+            save_config()
+            print(f"[init] 已写入默认配置")
+
+
+def _migrate_old_config():
+    """从旧版本配置路径迁移到新路径 (v0.0 的 %TEMP%/go-reviewer/)"""
+    old_path = os.path.join(tempfile.gettempdir(), "go-reviewer", "config.json")
+    if os.path.exists(old_path) and old_path != CONFIG_FILE:
+        try:
+            with open(old_path, "r", encoding="utf-8") as f:
+                old = json.load(f)
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(old, f, ensure_ascii=False, indent=2)
+            print(f"[init] 已从旧配置迁移: {old_path} → {CONFIG_FILE}")
+        except Exception as e:
+            print(f"[init] 迁移旧配置失败 (忽略): {e}")
 
 
 def save_config():
@@ -101,6 +175,16 @@ def is_katago_configured() -> bool:
         os.path.exists(cfg.get("configPath", "")),
         os.path.exists(cfg.get("modelPath", "")),
     ])
+
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    return jsonify({
+        "status": "ok",
+        "katagoConfigured": is_katago_configured(),
+        "katagoDir": KATAGO_DIR,
+        "configDir": _CONFIG_DIR,
+    })
 
 
 @app.route("/api/config/katago", methods=["POST"])
@@ -130,6 +214,40 @@ def set_llm_config():
 @app.route("/api/config/llm", methods=["GET"])
 def get_llm_config():
     return jsonify(config_store["llm"])
+
+
+@app.route("/api/gpu/auto-optimize", methods=["POST"])
+def gpu_auto_optimize():
+    """检测当前 GPU 并生成最优 analysis_auto.cfg"""
+    katago_path = config_store["katago"].get("path") or _DEFAULT_KATAGO_PATH
+    model_path = config_store["katago"].get("modelPath") or _DEFAULT_MODEL_PATH
+
+    if not os.path.exists(katago_path):
+        return jsonify({"success": False, "error": f"katago.exe 不存在: {katago_path}"}), 400
+    if not os.path.exists(model_path):
+        return jsonify({"success": False, "error": f"模型文件不存在: {model_path}"}), 400
+
+    # 优先写入 KataGo 目录(便于用户查看), 失败则降级到 temp 目录
+    try:
+        result = auto_optimize(katago_path, model_path, KATAGO_DIR)
+    except PermissionError:
+        result = auto_optimize(katago_path, model_path, _CONFIG_DIR)
+
+    if result.get("success") and result.get("configPath"):
+        # 自动应用为当前配置
+        config_store["katago"]["configPath"] = result["configPath"]
+        save_config()
+        reset_analysis_engine()
+        reset_engine()
+        result["applied"] = True
+
+    return jsonify(result)
+
+
+@app.route("/api/gpu/profiles", methods=["GET"])
+def gpu_profiles():
+    """返回所有 GPU profile 定义, 供前端展示"""
+    return jsonify({"profiles": GPU_PROFILES})
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -836,4 +954,20 @@ def get_example_games():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000, use_reloader=False)
+    import argparse
+    parser = argparse.ArgumentParser(description="go-reviewer backend server")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("GO_REVIEWER_PORT", "5000")),
+                        help="HTTP port to listen on (default: 5000 / env GO_REVIEWER_PORT)")
+    parser.add_argument("--host", default=os.environ.get("GO_REVIEWER_HOST", "127.0.0.1"),
+                        help="Host to bind (default: 127.0.0.1)")
+    parser.add_argument("--prod", action="store_true",
+                        help="Production mode (disable Flask debugger). Auto-on when frozen.")
+    args = parser.parse_args()
+
+    is_frozen = getattr(sys, "frozen", False)
+    debug_mode = not (args.prod or is_frozen)
+
+    # 关键: 打印一个 token 让 Tauri 主进程知道服务启动好了
+    print(f"[ready] go-reviewer-backend listening on http://{args.host}:{args.port}", flush=True)
+
+    app.run(host=args.host, port=args.port, debug=debug_mode, use_reloader=False)

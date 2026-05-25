@@ -1,6 +1,17 @@
 import React, { useState, useEffect } from "react";
-import { Save, Server, Brain, Info } from "lucide-react";
+import {
+  Save,
+  Server,
+  Brain,
+  Info,
+  Zap,
+  Cpu,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+} from "lucide-react";
 import { useGameStore } from "../store/gameStore";
+import { apiUrl } from "../lib/api";
 
 const Settings: React.FC = () => {
   const { katagoConfig, llmConfig, setKatagoConfig, setLLMConfig } =
@@ -22,6 +33,11 @@ const Settings: React.FC = () => {
     baseUrl: llmConfig.baseUrl || "",
   });
 
+  // GPU 自动优化状态
+  const [gpuOptimizing, setGpuOptimizing] = useState(false);
+  const [gpuResult, setGpuResult] = useState<any>(null);
+  const [gpuError, setGpuError] = useState<string | null>(null);
+
   useEffect(() => {
     setKatagoForm({
       path: katagoConfig.path,
@@ -39,7 +55,7 @@ const Settings: React.FC = () => {
   const saveKatagoConfig = async () => {
     setSaveStatus("saving");
     try {
-      const response = await fetch("http://localhost:5000/api/config/katago", {
+      const response = await fetch(apiUrl("/api/config/katago"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(katagoForm),
@@ -62,7 +78,7 @@ const Settings: React.FC = () => {
   const saveLLMConfig = async () => {
     setSaveStatus("saving");
     try {
-      const response = await fetch("http://localhost:5000/api/config/llm", {
+      const response = await fetch(apiUrl("/api/config/llm"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -86,6 +102,31 @@ const Settings: React.FC = () => {
       console.error("保存失败:", error);
       setSaveStatus("error");
       setTimeout(() => setSaveStatus("idle"), 2000);
+    }
+  };
+
+  const runGpuAutoOptimize = async () => {
+    setGpuOptimizing(true);
+    setGpuError(null);
+    setGpuResult(null);
+    try {
+      const res = await fetch(apiUrl("/api/gpu/auto-optimize"), {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setGpuError(data.error || "检测失败");
+      } else {
+        setGpuResult(data);
+        if (data.configPath) {
+          setKatagoForm((prev) => ({ ...prev, configPath: data.configPath }));
+          setKatagoConfig({ ...katagoConfig, configPath: data.configPath });
+        }
+      }
+    } catch (e: any) {
+      setGpuError(e?.message || "网络错误");
+    } finally {
+      setGpuOptimizing(false);
     }
   };
 
@@ -217,6 +258,114 @@ const Settings: React.FC = () => {
               <Save className="w-5 h-5" />
               保存 KataGo 配置
             </button>
+
+            {/* === GPU 自动优化 === */}
+            <div className="mt-4 pt-4 border-t border-amber-100">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-100 to-cyan-100 flex items-center justify-center flex-shrink-0">
+                  <Zap className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-base font-medium text-go-wood">
+                    GPU 自动优化
+                  </h3>
+                  <p className="text-xs text-go-woodLight">
+                    自动检测显卡并生成最优 KataGo
+                    配置（线程数、批处理、设备绑定）
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={runGpuAutoOptimize}
+                disabled={gpuOptimizing}
+                className="w-full px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white rounded-lg hover:shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2 font-medium text-sm"
+              >
+                {gpuOptimizing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    检测中…（约 10-20 秒）
+                  </>
+                ) : (
+                  <>
+                    <Cpu className="w-4 h-4" />
+                    一键自动优化
+                  </>
+                )}
+              </button>
+
+              {gpuError && (
+                <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                  <span className="text-xs text-red-700">{gpuError}</span>
+                </div>
+              )}
+
+              {gpuResult && (
+                <div className="mt-3 p-4 bg-gradient-to-br from-emerald-50 to-cyan-50 border border-emerald-200 rounded-lg space-y-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span className="text-sm font-medium text-emerald-800">
+                      已应用最优配置
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="text-go-woodLight">检测到 GPU：</div>
+                    <div className="font-mono text-go-wood">
+                      {gpuResult.selectedDevice?.name || "（无 GPU，使用 CPU）"}
+                    </div>
+                    <div className="text-go-woodLight">匹配 Profile：</div>
+                    <div className="font-medium text-emerald-700">
+                      {gpuResult.profile?.name}
+                    </div>
+                    <div className="text-go-woodLight">搜索线程：</div>
+                    <div className="font-mono text-go-wood">
+                      {gpuResult.profile?.numAnalysisThreads} ×{" "}
+                      {gpuResult.profile?.numSearchThreadsPerAnalysisThread} ={" "}
+                      {(gpuResult.profile?.numAnalysisThreads || 0) *
+                        (gpuResult.profile?.numSearchThreadsPerAnalysisThread ||
+                          0)}
+                    </div>
+                    <div className="text-go-woodLight">批处理大小：</div>
+                    <div className="font-mono text-go-wood">
+                      {gpuResult.profile?.nnMaxBatchSize}
+                    </div>
+                    {gpuResult.fp16 && (
+                      <>
+                        <div className="text-go-woodLight">FP16 加速：</div>
+                        <div className="font-mono text-go-wood">
+                          {gpuResult.fp16.compute ? "✓ 已启用" : "✗ 不支持"}
+                          {gpuResult.fp16.tensorCores && " + 张量核心"}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {gpuResult.devices?.length > 1 && (
+                    <details className="mt-2">
+                      <summary className="text-xs text-go-woodLight cursor-pointer hover:text-go-wood">
+                        所有 OpenCL 设备 ({gpuResult.devices.length})
+                      </summary>
+                      <ul className="mt-1 ml-4 text-xs space-y-0.5 list-disc text-go-woodLight">
+                        {gpuResult.devices.map((d: any) => (
+                          <li key={d.id}>
+                            <span className="font-mono">[{d.id}]</span> {d.name}{" "}
+                            <span className="text-emerald-600">
+                              (score {d.score.toLocaleString()})
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                  <p className="text-xs text-go-woodLight pt-1 border-t border-emerald-100">
+                    配置文件已写入并自动应用：
+                    <code className="ml-1 font-mono bg-white px-1.5 py-0.5 rounded">
+                      analysis_auto.cfg
+                    </code>
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
