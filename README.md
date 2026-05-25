@@ -5,10 +5,8 @@
 **Go-Reviewer** 是一款结合 KataGo 围棋引擎与大语言模型的智能复盘桌面应用，让专业围棋复盘触手可及。支持在浏览器中使用，也可打包为跨平台桌面应用（Windows / macOS / Linux）。
 
 <div align="center">
-  <img src="screenshots/01-home.png" width="45%" alt="首页" />
-  <img src="screenshots/02-settings.png" width="45%" alt="设置页" />
-  <br />
-  <img src="screenshots/04-review-empty.png" width="91%" alt="复盘界面" />
+  <img src="screenshots/01-home.png" width="48%" alt="首页" />
+  <img src="screenshots/02-settings.png" width="48%" alt="设置页" />
 </div>
 
 ## 功能特性
