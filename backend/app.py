@@ -4,6 +4,7 @@ import uuid
 import json
 import tempfile
 import traceback
+import threading
 from typing import List, Dict
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -94,7 +95,69 @@ except Exception:
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 print(f"[init] Upload folder: {UPLOAD_FOLDER}")
 
-games_store = {}
+# ---- 全局存储 + 线程锁 (#8) ----
+_games_lock = threading.Lock()
+games_store: Dict[str, dict] = {}
+
+_config_lock = threading.Lock()
+
+# games 持久化文件路径 (#6) — 仅存元数据和棋步，不存分析（可重算）
+GAMES_FILE = os.path.join(_CONFIG_DIR, "games.json")
+
+
+def _games_get(game_id: str):
+    """线程安全地读取一局棋。不存在返回 None。"""
+    with _games_lock:
+        return games_store.get(game_id)
+
+
+def _games_set(game_id: str, game: dict):
+    """线程安全地写入一局棋，并持久化到磁盘。"""
+    with _games_lock:
+        games_store[game_id] = game
+        _save_games_locked()
+
+
+def _games_del(game_id: str):
+    """线程安全地删除一局棋。"""
+    with _games_lock:
+        games_store.pop(game_id, None)
+        _save_games_locked()
+
+
+def _save_games_locked():
+    """持久化 games_store（调用方须已持有 _games_lock）。
+    只保存元数据和棋步；analyses 不持久化（可在会话中重算）。
+    """
+    try:
+        snapshot = {}
+        for gid, g in games_store.items():
+            snapshot[gid] = {
+                k: v for k, v in g.items() if k != "analyses"
+            }
+        tmp = GAMES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, ensure_ascii=False)
+        os.replace(tmp, GAMES_FILE)  # 原子替换，避免写一半损坏
+    except Exception as e:
+        print(f"[games] 持久化失败 (忽略): {e}")
+
+
+def load_games():
+    """启动时从磁盘恢复 games_store（analyses 重置为空）。"""
+    if not os.path.exists(GAMES_FILE):
+        return
+    try:
+        with open(GAMES_FILE, "r", encoding="utf-8") as f:
+            saved: dict = json.load(f)
+        with _games_lock:
+            for gid, g in saved.items():
+                g.setdefault("analyses", {})
+                games_store[gid] = g
+        print(f"[init] 已恢复 {len(saved)} 局棋谱")
+    except Exception as e:
+        print(f"[init] 恢复棋谱失败 (忽略): {e}")
+
 
 # ---- 预置默认 KataGo 路径，首次启动即可用 ----
 # 适配不同平台的可执行文件名
@@ -163,6 +226,7 @@ def save_config():
 
 
 load_config()
+load_games()
 
 
 def is_katago_configured() -> bool:
@@ -190,8 +254,9 @@ def health():
 @app.route("/api/config/katago", methods=["POST"])
 def set_katago_config():
     data = request.json
-    config_store["katago"].update(data)
-    save_config()
+    with _config_lock:
+        config_store["katago"].update(data)
+        save_config()
     reset_engine()
     reset_analysis_engine()
     print(f"[config] KataGo 配置已更新: path={config_store['katago']['path']!r}, configured={is_katago_configured()}")
@@ -206,8 +271,9 @@ def get_katago_config():
 @app.route("/api/config/llm", methods=["POST"])
 def set_llm_config():
     data = request.json
-    config_store["llm"].update(data)
-    save_config()
+    with _config_lock:
+        config_store["llm"].update(data)
+        save_config()
     return jsonify({"success": True, "config": config_store["llm"]})
 
 
@@ -283,7 +349,7 @@ def upload_sgf():
             print(f"[upload] 跳过磁盘缓存（{e}），仅保存到内存")
 
         parsed = SGFParser.parse(sgf_content)
-        games_store[game_id] = {
+        _games_set(game_id, {
             "sgfContent": sgf_content,
             "moves": parsed["moves"],
             "boardSize": parsed["boardSize"],
@@ -293,7 +359,7 @@ def upload_sgf():
             "result": parsed["result"],
             "analyses": {},
             "lastPlayedMove": 0
-        }
+        })
 
         return jsonify({
             "gameId": game_id,
@@ -309,43 +375,12 @@ def upload_sgf():
         return jsonify({"error": f"上传失败: {str(e)}"}), 500
 
 
-@app.route("/api/game/new", methods=["POST"])
-def create_new_game():
-    """创建一个空白对局，用于实时落子模式"""
-    data = request.json or {}
-    board_size = int(data.get("boardSize", 19))
-    komi = float(data.get("komi", 6.5))
-
-    game_id = str(uuid.uuid4())
-    games_store[game_id] = {
-        "sgfContent": "",
-        "moves": [],
-        "boardSize": board_size,
-        "komi": komi,
-        "playerBlack": "黑方",
-        "playerWhite": "白方",
-        "result": "",
-        "analyses": {},
-        "lastPlayedMove": 0
-    }
-
-    return jsonify({
-        "gameId": game_id,
-        "moves": [],
-        "boardSize": board_size,
-        "komi": komi,
-        "playerBlack": "黑方",
-        "playerWhite": "白方",
-        "result": ""
-    })
-
-
 @app.route("/api/game/<game_id>", methods=["GET"])
 def get_game(game_id):
-    if game_id not in games_store:
+    game = _games_get(game_id)
+    if game is None:
         return jsonify({"error": "Game not found"}), 404
 
-    game = games_store[game_id]
     return jsonify({
         "gameId": game_id,
         "moves": game["moves"],
@@ -364,7 +399,7 @@ def new_game():
     komi = data.get("komi", 6.5)
 
     game_id = str(uuid.uuid4())
-    games_store[game_id] = {
+    _games_set(game_id, {
         "sgfContent": "",
         "moves": [],
         "boardSize": board_size,
@@ -375,7 +410,7 @@ def new_game():
         "analyses": {},
         "lastPlayedMove": 0,
         "isLive": True
-    }
+    })
     print(f"[live] 新建实时对局: {game_id}, 棋盘 {board_size}x{board_size}, 贴目 {komi}")
     return jsonify({
         "gameId": game_id,
@@ -388,7 +423,8 @@ def new_game():
 @app.route("/api/game/<game_id>/play", methods=["POST"])
 def play_move(game_id):
     """实时落子：追加一手到对局"""
-    if game_id not in games_store:
+    game = _games_get(game_id)
+    if game is None:
         return jsonify({"error": "Game not found"}), 404
 
     data = request.json or {}
@@ -400,8 +436,6 @@ def play_move(game_id):
     if not position:
         return jsonify({"error": "Missing position"}), 400
 
-    game = games_store[game_id]
-
     # 把 KataGo 坐标 (如 Q16) 转回 (x,y)
     LETTERS = "ABCDEFGHJKLMNOPQRST"
     try:
@@ -412,15 +446,17 @@ def play_move(game_id):
     except (ValueError, IndexError):
         return jsonify({"error": f"Invalid position: {position}"}), 400
 
-    move_num = len(game["moves"]) + 1
-    game["moves"].append({
-        "number": move_num,
-        "color": color,
-        "position": position,
-        "x": x,
-        "y": y
-    })
-    game["lastPlayedMove"] = move_num
+    with _games_lock:
+        move_num = len(game["moves"]) + 1
+        game["moves"].append({
+            "number": move_num,
+            "color": color,
+            "position": position,
+            "x": x,
+            "y": y
+        })
+        game["lastPlayedMove"] = move_num
+        _save_games_locked()
 
     return jsonify({
         "success": True,
@@ -432,20 +468,22 @@ def play_move(game_id):
 @app.route("/api/game/<game_id>/undo", methods=["POST"])
 def undo_move(game_id):
     """实时落子：悔棋"""
-    if game_id not in games_store:
+    game = _games_get(game_id)
+    if game is None:
         return jsonify({"error": "Game not found"}), 404
 
-    game = games_store[game_id]
-    if not game["moves"]:
-        return jsonify({"error": "No moves to undo"}), 400
+    with _games_lock:
+        if not game["moves"]:
+            return jsonify({"error": "No moves to undo"}), 400
 
-    removed = game["moves"].pop()
-    game["lastPlayedMove"] = len(game["moves"])
-    # 清除该手及之后的分析缓存
-    move_num = removed.get("number", removed.get("moveNumber", 0))
-    for k in list(game["analyses"].keys()):
-        if k >= move_num:
-            del game["analyses"][k]
+        removed = game["moves"].pop()
+        game["lastPlayedMove"] = len(game["moves"])
+        # 清除该手及之后的分析缓存
+        move_num = removed.get("number", removed.get("moveNumber", 0))
+        for k in list(game["analyses"].keys()):
+            if k >= move_num:
+                del game["analyses"][k]
+        _save_games_locked()
 
     return jsonify({
         "success": True,
@@ -480,10 +518,9 @@ def _mock_analysis(move_number: int):
 
 @app.route("/api/analyze/<game_id>/<int:move_number>", methods=["GET"])
 def analyze_move(game_id, move_number):
-    if game_id not in games_store:
+    game = _games_get(game_id)
+    if game is None:
         return jsonify({"error": "Game not found"}), 404
-
-    game = games_store[game_id]
 
     if move_number in game["analyses"]:
         return jsonify(game["analyses"][move_number])
@@ -565,10 +602,9 @@ def analyze_move(game_id, move_number):
 
 @app.route("/api/commentary/<game_id>/<int:move_number>", methods=["GET"])
 def get_commentary(game_id, move_number):
-    if game_id not in games_store:
+    game = _games_get(game_id)
+    if game is None:
         return jsonify({"error": "Game not found"}), 404
-
-    game = games_store[game_id]
 
     if move_number not in game["analyses"]:
         return jsonify({"error": "Analysis not available"}), 400
@@ -674,13 +710,12 @@ def _moves_to_analysis_format(game_moves: List[Dict], up_to: int) -> List[List[s
 @app.route("/api/flash-analyze/<game_id>", methods=["POST"])
 def flash_analyze(game_id):
     """闪电分析：使用 KataGo Analysis Engine 一次性分析全局所有手"""
-    if game_id not in games_store:
+    game = _games_get(game_id)
+    if game is None:
         return jsonify({"error": "Game not found"}), 404
 
     if not is_katago_configured():
         return jsonify({"error": "KataGo 未配置"}), 400
-
-    game = games_store[game_id]
     data = request.json or {}
     max_visits = data.get("maxVisits", 100)
     turns_filter = data.get("turns")
@@ -753,10 +788,9 @@ def hawk_eye(game_id):
     - 目差波动 (scoreChange): 与上一手目差的差值
     - 失误等级 (errorLevel): excellent/good/normal/inaccuracy/mistake/blunder
     """
-    if game_id not in games_store:
+    game = _games_get(game_id)
+    if game is None:
         return jsonify({"error": "Game not found"}), 404
-
-    game = games_store[game_id]
     moves = game["moves"]
     analyses = game["analyses"]
 
@@ -784,14 +818,13 @@ def hawk_eye(game_id):
 
     for i, move in enumerate(moves):
         move_num = i + 1
-        analysis = analyses.get(move_num) or analyses.get(move_num - 1)
 
         actual_pos = move["position"]
+        # 推荐手应来自落子前的局面分析 (move_num - 1)
         recommended = []
-        if move_num - 1 in analyses:
-            recommended = [r["position"] for r in analyses[move_num - 1].get("recommendedMoves", [])]
-        elif analysis:
-            recommended = [r["position"] for r in analysis.get("recommendedMoves", [])]
+        prev_analysis = analyses.get(move_num - 1)
+        if prev_analysis:
+            recommended = [r["position"] for r in prev_analysis.get("recommendedMoves", [])]
 
         matched_rank = -1
         if recommended:
@@ -899,13 +932,12 @@ def hawk_eye(game_id):
 @app.route("/api/estimate/<game_id>/<int:move_number>", methods=["GET"])
 def estimate_territory(game_id, move_number):
     """形势判断 - 返回每个交叉点的归属概率"""
-    if game_id not in games_store:
+    game = _games_get(game_id)
+    if game is None:
         return jsonify({"error": "Game not found"}), 404
 
     if not is_katago_configured():
         return jsonify({"error": "KataGo 未配置"}), 400
-
-    game = games_store[game_id]
 
     try:
         cfg = config_store["katago"]
@@ -970,4 +1002,4 @@ if __name__ == "__main__":
     # 关键: 打印一个 token 让 Tauri 主进程知道服务启动好了
     print(f"[ready] go-reviewer-backend listening on http://{args.host}:{args.port}", flush=True)
 
-    app.run(host=args.host, port=args.port, debug=debug_mode, use_reloader=False)
+    app.run(host=args.host, port=args.port, debug=debug_mode, use_reloader=False, threaded=True)

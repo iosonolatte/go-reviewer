@@ -67,11 +67,8 @@ const Review: React.FC = () => {
 
       const promise = (async () => {
         try {
-          // 使用 AbortController 让相同 moveNum 的旧请求可被取消
-          const controller = new AbortController();
           const response = await fetch(
             apiUrl(`/api/analyze/${currentGame.gameId}/${moveNum}`),
-            { signal: controller.signal },
           );
           if (response.status === 404) {
             console.warn("棋谱在后端不存在，可能后端已重启");
@@ -82,7 +79,6 @@ const Review: React.FC = () => {
           addAnalysis(moveNum, analysis);
           return true;
         } catch (error) {
-          if ((error as Error).name === "AbortError") return false;
           console.error("分析失败:", error);
           return false;
         } finally {
